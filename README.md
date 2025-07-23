@@ -19,10 +19,7 @@
 - **PyQt5**：用于图形用户界面（GUI）的库
 - **psutil**：用于获取系统网络接口信息
 
-可以通过以下命令安装所需的库：
 
-```bash
-pip install PyQt5 psutil
 # macOS IP 修改工具版本更新说明
 
 ## 版本 2.0 → 版本 1.0
