@@ -1,0 +1,631 @@
+import sys
+import re
+import subprocess
+import json
+import os
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout,
+    QMessageBox, QComboBox, QGridLayout, QGroupBox, QStyleFactory, QListWidget, QHBoxLayout, QSizePolicy
+)
+from PyQt6.QtGui import QFont, QPalette, QColor
+from PyQt6.QtCore import Qt
+
+class IPChanger(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.config_file = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "IPChanger", "ip_configs.json")
+        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+        self.configs = self.load_configs()
+        self.initUI()
+
+    def initUI(self):
+        print("Starting initUI...")  # 调试日志
+        self.setWindowTitle("macOS IP 修改工具")
+        self.setGeometry(200, 200, 900, 505)
+        self.setMinimumSize(600, 400)
+
+        # 设置全局字体
+        print("Setting global font...")  # 调试日志
+        try:
+            app_font = QFont("SF Pro", 13)  # 使用 macOS 原生字体 SF Pro，13pt
+            app_font.setWeight(QFont.Weight.Normal)
+            QApplication.setFont(app_font)
+        except Exception as e:
+            print(f"Failed to set font: {e}")  # 调试日志
+            QMessageBox.warning(self, "警告", f"无法设置字体: {str(e)}")
+
+        # 主题美化
+        print("Setting style to macos...")  # 调试日志
+        try:
+            QApplication.setStyle(QStyleFactory.create("macos"))
+        except Exception as e:
+            print(f"Failed to set style: {e}")  # 调试日志
+            QMessageBox.warning(self, "警告", f"无法设置界面主题: {str(e)}")
+
+        main_layout = QHBoxLayout()
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+
+        # 左侧布局：网卡信息 + 已保存配置 + 路由信息表
+        left_layout = QVBoxLayout()
+
+        # 网卡信息分组
+        print("Initializing network group...")  # 调试日志
+        net_group = QGroupBox("网卡信息")
+        net_group.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        net_layout = QGridLayout()
+        net_group.setLayout(net_layout)
+
+        self.interface_label = QLabel("选择网卡:")
+        self.interface_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.interface_dropdown = QComboBox()
+        self.interface_dropdown.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.interface_dropdown.currentIndexChanged.connect(self.update_ui)
+
+        self.status_label = QLabel("网卡状态:")
+        self.status_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.status_value = QLabel("N/A")
+        self.current_ip_label = QLabel("当前 IP:")
+        self.current_ip_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.current_ip_value = QLabel("N/A")
+        self.subnet_label = QLabel("子网掩码:")
+        self.subnet_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.subnet_value = QLabel("N/A")
+        self.gateway_label = QLabel("网关:")
+        self.gateway_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.gateway_value = QLabel("N/A")
+
+        net_layout.addWidget(self.interface_label, 0, 0)
+        net_layout.addWidget(self.interface_dropdown, 0, 1)
+        net_layout.addWidget(self.status_label, 1, 0)
+        net_layout.addWidget(self.status_value, 1, 1)
+        net_layout.addWidget(self.current_ip_label, 2, 0)
+        net_layout.addWidget(self.current_ip_value, 2, 1)
+        net_layout.addWidget(self.subnet_label, 3, 0)
+        net_layout.addWidget(self.subnet_value, 3, 1)
+        net_layout.addWidget(self.gateway_label, 4, 0)
+        net_layout.addWidget(self.gateway_value, 4, 1)
+
+        # 保存的配置分组
+        print("Initializing saved config group...")  # 调试日志
+        saved_group = QGroupBox("已保存的配置")
+        saved_group.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        saved_layout = QVBoxLayout()
+        saved_group.setLayout(saved_layout)
+
+        self.saved_configs_list = QListWidget()
+        self.saved_configs_list.setFont(QFont("SF Pro", 12))
+        self.saved_configs_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.load_saved_configs_to_list()
+        self.saved_configs_list.itemClicked.connect(self.load_selected_config)
+
+        self.delete_config_btn = QPushButton("删除选中配置")
+        self.delete_config_btn.clicked.connect(self.delete_selected_config)
+        self.delete_config_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                font-family: 'SF Pro';
+                font-size: 14px;
+                font-weight: bold;
+                padding: 8px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+            }
+        """)
+
+        saved_layout.addWidget(self.saved_configs_list)
+        saved_layout.addWidget(self.delete_config_btn)
+
+        # 路由信息表分组
+        print("Initializing route list group...")  # 调试日志
+        route_list_group = QGroupBox("路由信息表")
+        route_list_group.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        route_list_layout = QVBoxLayout()
+        route_list_group.setLayout(route_list_layout)
+
+        print("Creating route_list...")  # 调试日志
+        self.route_list = QListWidget()
+        self.route_list.setFont(QFont("SF Pro", 12))
+        self.route_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        print("route_list created")  # 调试日志
+
+        self.delete_route_btn = QPushButton("删除选中路由")
+        self.delete_route_btn.clicked.connect(self.delete_route)
+        self.delete_route_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                font-family: 'SF Pro';
+                font-size: 14px;
+                font-weight: bold;
+                padding: 8px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+            }
+        """)
+
+        route_list_layout.addWidget(self.route_list)
+        route_list_layout.addWidget(self.delete_route_btn)
+
+        left_layout.addWidget(net_group)
+        left_layout.addWidget(saved_group)
+        left_layout.addWidget(route_list_group)
+        left_layout.addStretch(1)
+
+        # 右侧布局：IP 配置 + 路由管理
+        right_layout = QVBoxLayout()
+
+        # IP 配置分组
+        print("Initializing IP config group...")  # 调试日志
+        ip_group = QGroupBox("IP 配置")
+        ip_group.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        ip_layout = QGridLayout()
+        ip_group.setLayout(ip_layout)
+
+        self.profile_name_label = QLabel("配置名称:")
+        self.profile_name_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.profile_name_input = QLineEdit()
+        self.profile_name_input.setFont(QFont("SF Pro", 12))
+        self.ip_label = QLabel("新 IP:")
+        self.ip_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.ip_input = QLineEdit()
+        self.ip_input.setFont(QFont("SF Pro", 12))
+        self.ip_input.textChanged.connect(lambda: self.validate_input(self.ip_input))
+        self.ip_status = QLabel("")
+        self.subnet_label = QLabel("子网掩码:")
+        self.subnet_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.subnet_input = QLineEdit()
+        self.subnet_input.setFont(QFont("SF Pro", 12))
+        self.subnet_input.textChanged.connect(lambda: self.validate_input(self.subnet_input))
+        self.subnet_status = QLabel("")
+        self.gateway_label = QLabel("网关:")
+        self.gateway_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.gateway_input = QLineEdit()
+        self.gateway_input.setFont(QFont("SF Pro", 12))
+        self.gateway_input.textChanged.connect(lambda: self.validate_input(self.gateway_input))
+        self.gateway_status = QLabel("")
+
+        ip_layout.addWidget(self.profile_name_label, 0, 0)
+        ip_layout.addWidget(self.profile_name_input, 0, 1)
+        ip_layout.addWidget(self.ip_label, 1, 0)
+        ip_layout.addWidget(self.ip_input, 1, 1)
+        ip_layout.addWidget(self.ip_status, 1, 2)
+        ip_layout.addWidget(self.subnet_label, 2, 0)
+        ip_layout.addWidget(self.subnet_input, 2, 1)
+        ip_layout.addWidget(self.subnet_status, 2, 2)
+        ip_layout.addWidget(self.gateway_label, 3, 0)
+        ip_layout.addWidget(self.gateway_input, 3, 1)
+        ip_layout.addWidget(self.gateway_status, 3, 2)
+
+        self.apply_btn = QPushButton("修改 IP")
+        self.apply_btn.clicked.connect(self.change_ip)
+        self.apply_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                font-family: 'SF Pro';
+                font-size: 14px;
+                font-weight: bold;
+                padding: 8px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+        """)
+
+        self.dhcp_btn = QPushButton("恢复 DHCP")
+        self.dhcp_btn.clicked.connect(self.set_dhcp)
+        self.dhcp_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                font-family: 'SF Pro';
+                font-size: 14px;
+                font-weight: bold;
+                padding: 8px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+
+        self.save_config_btn = QPushButton("保存配置")
+        self.save_config_btn.clicked.connect(self.save_config)
+        self.save_config_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FFC107;
+                color: white;
+                font-family: 'SF Pro';
+                font-size: 14px;
+                font-weight: bold;
+                padding: 8px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #FFA000;
+            }
+        """)
+
+        # 路由管理分组
+        print("Initializing route group...")  # 调试日志
+        route_group = QGroupBox("路由管理")
+        route_group.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        route_layout = QGridLayout()
+        route_group.setLayout(route_layout)
+
+        self.route_dest_label = QLabel("目标网络:")
+        self.route_dest_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.route_dest_input = QLineEdit()
+        self.route_dest_input.setFont(QFont("SF Pro", 12))
+        self.route_dest_input.textChanged.connect(lambda: self.validate_input(self.route_dest_input))
+        self.route_dest_status = QLabel("")
+        self.route_mask_label = QLabel("子网掩码:")
+        self.route_mask_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.route_mask_input = QLineEdit()
+        self.route_mask_input.setFont(QFont("SF Pro", 12))
+        self.route_mask_input.textChanged.connect(lambda: self.validate_input(self.route_mask_input))
+        self.route_mask_status = QLabel("")
+        self.route_gateway_label = QLabel("网关:")
+        self.route_gateway_label.setFont(QFont("SF Pro", 14, QFont.Weight.Bold))
+        self.route_gateway_input = QLineEdit()
+        self.route_gateway_input.setFont(QFont("SF Pro", 12))
+        self.route_gateway_input.textChanged.connect(lambda: self.validate_input(self.route_gateway_input))
+        self.route_gateway_status = QLabel("")
+
+        route_layout.addWidget(self.route_dest_label, 0, 0)
+        route_layout.addWidget(self.route_dest_input, 0, 1)
+        route_layout.addWidget(self.route_dest_status, 0, 2)
+        route_layout.addWidget(self.route_mask_label, 1, 0)
+        route_layout.addWidget(self.route_mask_input, 1, 1)
+        route_layout.addWidget(self.route_mask_status, 1, 2)
+        route_layout.addWidget(self.route_gateway_label, 2, 0)
+        route_layout.addWidget(self.route_gateway_input, 2, 1)
+        route_layout.addWidget(self.route_gateway_status, 2, 2)
+
+        self.add_route_btn = QPushButton("添加临时路由")
+        self.add_route_btn.clicked.connect(self.add_route)
+        self.add_route_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF5722;
+                color: white;
+                font-family: 'SF Pro';
+                font-size: 14px;
+                font-weight: bold;
+                padding: 8px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #E64A19;
+            }
+        """)
+
+        route_layout.addWidget(self.add_route_btn, 3, 0, 1, 2)
+
+        right_layout.addWidget(ip_group)
+        right_layout.addWidget(self.apply_btn)
+        right_layout.addWidget(self.dhcp_btn)
+        right_layout.addWidget(self.save_config_btn)
+        right_layout.addWidget(route_group)
+        right_layout.addStretch(1)
+
+        # 主界面布局
+        main_layout.addLayout(left_layout, 1)
+        main_layout.addLayout(right_layout, 1)
+        self.setLayout(main_layout)
+
+        # 延迟初始化网卡和路由列表
+        print("Initializing network interfaces...")  # 调试日志
+        try:
+            self.get_network_interfaces()
+        except Exception as e:
+            print(f"Failed to get network interfaces: {e}")  # 调试日志
+            QMessageBox.critical(self, "错误", f"无法获取网卡列表: {str(e)}")
+
+        print("initUI completed, calling update_ui...")  # 调试日志
+        try:
+            self.update_ui()
+        except Exception as e:
+            print(f"Failed to update UI: {e}")  # 调试日志
+            QMessageBox.warning(self, "警告", f"无法更新界面: {str(e)}")
+
+    def validate_input(self, input_field):
+        """实时校验输入框中的 IP 格式"""
+        text = input_field.text().strip()
+        status_label = None
+        if input_field == self.ip_input:
+            status_label = self.ip_status
+        elif input_field == self.subnet_input:
+            status_label = self.subnet_status
+        elif input_field == self.gateway_input:
+            status_label = self.gateway_status
+        elif input_field == self.route_dest_input:
+            status_label = self.route_dest_status
+        elif input_field == self.route_mask_input:
+            status_label = self.route_mask_status
+        elif input_field == self.route_gateway_input:
+            status_label = self.route_gateway_status
+
+        if not text:
+            status_label.setText("")
+            input_field.setStyleSheet("")
+            return
+
+        if self.validate_ip(text):
+            status_label.setText("✓")
+            status_label.setStyleSheet("color: green; font-family: 'SF Pro'; font-size: 14px; font-weight: bold;")
+            input_field.setStyleSheet("border: 1px solid green; font-family: 'SF Pro'; font-size: 12px;")
+        else:
+            status_label.setText("✗")
+            status_label.setStyleSheet("color: red; font-family: 'SF Pro'; font-size: 14px; font-weight: bold;")
+            input_field.setStyleSheet("border: 1px solid red; font-family: 'SF Pro'; font-size: 12px;")
+
+    def get_network_interfaces(self):
+        """获取 macOS 可用的网络接口列表"""
+        result = subprocess.run("networksetup -listallnetworkservices", shell=True, capture_output=True, text=True)
+        interfaces = result.stdout.strip().split("\n")[1:]  # 去掉第一行（标题）
+        if not interfaces:
+            raise Exception("No network interfaces found")
+        self.interface_dropdown.addItems(interfaces)
+
+    def get_network_info(self, interface):
+        """获取网卡详细状态"""
+        try:
+            result = subprocess.run(f"networksetup -getinfo \"{interface}\"", shell=True, capture_output=True, text=True)
+            output = result.stdout.strip()
+
+            status_match = re.search(r"IP address: (.+)", output)
+            subnet_match = re.search(r"Subnet mask: (.+)", output)
+            gateway_match = re.search(r"Router: (.+)", output)
+
+            ip_address = status_match.group(1) if status_match else "未连接"
+            subnet = subnet_match.group(1) if subnet_match else "N/A"
+            gateway = gateway_match.group(1) if gateway_match else "N/A"
+
+            if "DHCP Configuration" in output:
+                return "动态 IP (DHCP)", ip_address, subnet, gateway
+            else:
+                return "静态 IP", ip_address, subnet, gateway
+        except Exception:
+            return "未知", "N/A", "N/A", "N/A"
+
+    def update_ui(self):
+        """更新 UI（显示当前网卡状态和详细信息）"""
+        print("Updating UI...")  # 调试日志
+        interface = self.interface_dropdown.currentText()
+        if not interface:
+            print("No interface selected, skipping UI update")  # 调试日志
+            return
+        try:
+            status, ip, subnet, gateway = self.get_network_info(interface)
+            if hasattr(self, 'status_value') and hasattr(self, 'current_ip_value') and \
+               hasattr(self, 'subnet_value') and hasattr(self, 'gateway_value'):
+                self.status_value.setText(status)
+                self.current_ip_value.setText(ip)
+                self.subnet_value.setText(subnet)
+                self.gateway_value.setText(gateway)
+            else:
+                print("Network info attributes not initialized")  # 调试日志
+                QMessageBox.warning(self, "警告", "网络信息组件未初始化")
+        except Exception as e:
+            print(f"Failed to get network info: {e}")  # 调试日志
+            QMessageBox.warning(self, "警告", f"无法获取网卡信息: {str(e)}")
+
+        if hasattr(self, 'route_list'):
+            print("Loading routes to list...")  # 调试日志
+            try:
+                self.load_routes_to_list()
+            except Exception as e:
+                print(f"Failed to load routes: {e}")  # 调试日志
+                QMessageBox.warning(self, "警告", f"无法加载路由表: {str(e)}")
+        else:
+            print("route_list not initialized")  # 调试日志
+
+    def validate_ip(self, ip):
+        """校验 IP 格式"""
+        pattern = r"^(25[0-5]|2[0-4][0-9]|[0-1]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[0-1]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[0-1]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[0-1]?[0-9][0-9]?)$"
+        return re.match(pattern, ip) is not None
+
+    def change_ip(self):
+        """修改 IP 地址"""
+        interface = self.interface_dropdown.currentText()
+        ip = self.ip_input.text().strip()
+        subnet = self.subnet_input.text().strip()
+        gateway = self.gateway_input.text().strip()
+
+        if not interface:
+            QMessageBox.warning(self, "错误", "请先选择网卡！")
+            return
+
+        if not (self.validate_ip(ip) and self.validate_ip(subnet) and self.validate_ip(gateway)):
+            QMessageBox.warning(self, "错误", "IP、子网掩码或网关格式不正确！")
+            return
+
+        cmd = f"osascript -e 'do shell script \"networksetup -setmanual \\\"{interface}\\\" {ip} {subnet} {gateway}\" with administrator privileges'"
+        self.run_command(cmd)
+
+    def set_dhcp(self):
+        """切换到 DHCP 自动获取 IP"""
+        interface = self.interface_dropdown.currentText()
+        if not interface:
+            QMessageBox.warning(self, "错误", "请先选择网卡！")
+            return
+
+        cmd = f"osascript -e 'do shell script \"networksetup -setdhcp \\\"{interface}\\\"\" with administrator privileges'"
+        self.run_command(cmd)
+
+    def add_route(self):
+        """添加临时路由"""
+        destination = self.route_dest_input.text().strip()
+        mask = self.route_mask_input.text().strip()
+        gateway = self.route_gateway_input.text().strip()
+
+        if not (self.validate_ip(destination) and self.validate_ip(mask) and self.validate_ip(gateway)):
+            QMessageBox.warning(self, "错误", "目标网络、子网掩码或网关格式不正确！")
+            return
+
+        cmd = f"osascript -e 'do shell script \"route -n add -net {destination} -netmask {mask} {gateway}\" with administrator privileges'"
+        self.run_command(cmd)
+        self.load_routes_to_list()
+        self.route_dest_input.clear()
+        self.route_mask_input.clear()
+        self.route_gateway_input.clear()
+
+    def delete_route(self):
+        """删除选中的临时路由"""
+        if not hasattr(self, 'route_list'):
+            QMessageBox.warning(self, "错误", "路由列表未初始化！")
+            return
+        current_item = self.route_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "错误", "请先选择一个路由！")
+            return
+
+        destination = current_item.text().split(" ")[0].strip()
+        cmd = f"osascript -e 'do shell script \"route -n delete -net {destination}\" with administrator privileges'"
+        self.run_command(cmd)
+        self.load_routes_to_list()
+
+    def load_routes_to_list(self):
+        """加载当前路由表到列表"""
+        print("Clearing route_list...")  # 调试日志
+        if not hasattr(self, 'route_list'):
+            print("route_list not initialized in load_routes_to_list")  # 调试日志
+            return
+        self.route_list.clear()
+        try:
+            result = subprocess.run("netstat -rn | grep -E '^[0-9]'", shell=True, capture_output=True, text=True)
+            routes = result.stdout.strip().split("\n")
+            for route in routes:
+                parts = route.split()
+                if len(parts) >= 2:
+                    self.route_list.addItem(f"{parts[0]} via {parts[1]}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"无法加载路由表: {str(e)}")
+
+    def run_command(self, cmd):
+        """运行 shell 命令"""
+        try:
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if result.returncode == 0:
+                QMessageBox.information(self, "成功", "操作成功")
+                self.update_ui()
+            else:
+                QMessageBox.critical(self, "错误", f"执行失败:\n{result.stderr}")
+        except Exception as e:
+            QMessageBox.critical(self, "异常", f"发生错误:\n{str(e)}")
+
+    def load_configs(self):
+        """加载保存的配置"""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"无法加载配置文件: {str(e)}")
+                return {}
+        return {}
+
+    def save_configs(self):
+        """保存配置到文件"""
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(self.configs, f, indent=2)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"无法保存配置文件: {str(e)}")
+
+    def save_config(self):
+        """保存当前 IP 配置"""
+        profile_name = self.profile_name_input.text().strip()
+        ip = self.ip_input.text().strip()
+        subnet = self.subnet_input.text().strip()
+        gateway = self.gateway_input.text().strip()
+
+        if not profile_name:
+            QMessageBox.warning(self, "错误", "请输入配置名称！")
+            return
+
+        if not (self.validate_ip(ip) and self.validate_ip(subnet) and self.validate_ip(gateway)):
+            QMessageBox.warning(self, "错误", "IP、子网掩码或网关格式不正确！")
+            return
+
+        if profile_name in self.configs:
+            reply = QMessageBox.question(self, "确认", "配置已存在，是否覆盖？",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.No:
+                return
+
+        self.configs[profile_name] = {
+            "ip": ip,
+            "subnet": subnet,
+            "gateway": gateway
+        }
+        self.save_configs()
+        self.load_saved_configs_to_list()
+        QMessageBox.information(self, "成功", "配置已保存")
+        self.profile_name_input.clear()
+        self.ip_input.clear()
+        self.subnet_input.clear()
+        self.gateway_input.clear()
+
+    def load_saved_configs_to_list(self):
+        """加载保存的配置到列表显示"""
+        if not hasattr(self, 'saved_configs_list'):
+            print("saved_configs_list not initialized")  # 调试日志
+            return
+        self.saved_configs_list.clear()
+        for profile_name, config in self.configs.items():
+            self.saved_configs_list.addItem(
+                f"{profile_name}: {config['ip']} / {config['subnet']} / {config['gateway']}")
+
+    def load_selected_config(self, item):
+        """加载选中的配置到输入框"""
+        if not item:
+            return
+        profile_name = item.text().split(":")[0].strip()
+        if profile_name in self.configs:
+            config = self.configs[profile_name]
+            self.ip_input.setText(config["ip"])
+            self.subnet_input.setText(config["subnet"])
+            self.gateway_input.setText(config["gateway"])
+            self.profile_name_input.setText(profile_name)
+
+    def delete_selected_config(self):
+        """删除选中的配置"""
+        if not hasattr(self, 'saved_configs_list'):
+            QMessageBox.warning(self, "错误", "配置列表未初始化！")
+            return
+        current_item = self.saved_configs_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "错误", "请先选择一个配置！")
+            return
+
+        profile_name = current_item.text().split(":")[0].strip()
+        if profile_name in self.configs:
+            reply = QMessageBox.question(self, "确认", f"确定要删除配置 '{profile_name}' 吗？",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
+                del self.configs[profile_name]
+                self.save_configs()
+                self.load_saved_configs_to_list()
+                QMessageBox.information(self, "成功", "配置已删除")
+                self.profile_name_input.clear()
+                self.ip_input.clear()
+                self.subnet_input.clear()
+                self.gateway_input.clear()
+
+if __name__ == "__main__":
+    try:
+        app = QApplication(sys.argv)
+        window = IPChanger()
+        window.show()
+        sys.exit(app.exec())
+    except Exception as e:
+        print(f"Application failed to start: {e}")
+        sys.exit(1)
