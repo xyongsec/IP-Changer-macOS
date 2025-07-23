@@ -1,3 +1,5 @@
+<img width="936" height="569" alt="image" src="https://github.com/user-attachments/assets/1ae924a0-9d2c-4a25-a3e7-92531029b84d" />
+
 # IP Changer macOSv1.0
 
 `IP Changer` 是一款 macOS 应用程序，允许用户轻松更改其网络接口的 IP 地址。通过图形用户界面 (GUI)，用户可以选择网卡、配置 IP 地址，并验证 IP 配置的正确性。
